@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Cyber scrollbar styles */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0f0f13;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3a3a4c;
+    border-radius: 4px;
+    border: 1px solid #1a1a24;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00f0ff;
+  }
+}
