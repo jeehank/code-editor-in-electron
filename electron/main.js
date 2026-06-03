@@ -11,12 +11,13 @@ try {
 
 let mainWindow;
 let ptyProcess;
+let forceClose = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    frame: false, // Custom Title Bar
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -30,6 +31,12 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  mainWindow.on('close', (e) => {
+    if (forceClose) return;
+    e.preventDefault();
+    mainWindow.webContents.send('window-close-request');
+  });
 }
 
 app.whenReady().then(() => {
@@ -43,19 +50,27 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Window Controls
 ipcMain.handle('window:minimize', () => mainWindow.minimize());
 ipcMain.handle('window:maximize', () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
   else mainWindow.maximize();
 });
 ipcMain.handle('window:close', () => mainWindow.close());
+ipcMain.handle('window:close-confirm', () => {
+  forceClose = true;
+  if (mainWindow) {
+    mainWindow.close();
+  }
+});
 
-// File System IPC
 ipcMain.handle('dialog:openFolder', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (canceled) return null;
   return filePaths[0];
+});
+
+ipcMain.handle('dialog:showMessageBox', async (_, options) => {
+  return await dialog.showMessageBox(mainWindow, options);
 });
 
 async function readDirectoryRecursive(dirPath) {
@@ -68,7 +83,7 @@ async function readDirectoryRecursive(dirPath) {
         name: entry.name,
         isDirectory: true,
         path: fullPath,
-        children: [] // Children will be fetched lazily to prevent massive load times, or we can just fetch all if small. For now, we'll let frontend call readDir again for children.
+        children: []
       });
     } else {
       result.push({ name: entry.name, isDirectory: false, path: fullPath });
@@ -108,7 +123,6 @@ ipcMain.handle('fs:saveFile', async (_, filePath, content) => {
   }
 });
 
-// Search Workspace
 async function searchInDirectory(dirPath, query, results) {
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -119,9 +133,7 @@ async function searchInDirectory(dirPath, query, results) {
       if (entry.isDirectory()) {
         await searchInDirectory(fullPath, query, results);
       } else {
-        // Read file and check
         try {
-          // Basic text file check by extension or just attempt read (might fail for binaries)
           const content = await fs.readFile(fullPath, 'utf-8');
           if (content.includes(query)) {
             const lines = content.split('\n');
@@ -136,7 +148,6 @@ async function searchInDirectory(dirPath, query, results) {
             }
           }
         } catch (e) {
-          // Ignore binary read errors
         }
       }
     }
@@ -154,7 +165,6 @@ ipcMain.handle('fs:searchWorkspace', async (_, dirPath, query) => {
 
 ipcMain.handle('fs:createFile', async (_, filePath) => {
   try {
-    // create empty file if not exists
     await fs.writeFile(filePath, '', { flag: 'wx' });
     return true;
   } catch (error) {
@@ -173,7 +183,6 @@ ipcMain.handle('fs:deleteFile', async (_, filePath) => {
   }
 });
 
-// Terminal IPC using node-pty
 ipcMain.handle('terminal:spawn', (_, cwd) => {
   if (!pty) return false;
   const shell = process.env[process.platform === 'win32' ? 'COMSPEC' : 'SHELL'] || 'cmd.exe';

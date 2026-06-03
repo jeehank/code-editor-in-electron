@@ -1,4 +1,3 @@
-/** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
@@ -22,8 +21,6 @@ export default {
           accent: '#007acc',
           error: '#f48771',
           warning: '#cca700',
-          
-          // Syntax Colors
           syntaxKeyword: '#c586c0',
           syntaxFunction: '#dcdcaa',
           syntaxVariable: '#9cdcfe',

@@ -31,7 +31,6 @@ function TerminalPanel({ workspacePath }) {
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Connect to Electron IPC
     window.electronAPI.spawnTerminal(workspacePath);
 
     term.onData((data) => {
@@ -49,7 +48,6 @@ function TerminalPanel({ workspacePath }) {
 
     window.addEventListener('resize', handleResize);
     
-    // Initial size
     setTimeout(handleResize, 100);
 
     return () => {

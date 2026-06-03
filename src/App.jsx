@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import ActivityBar from './components/ActivityBar';
@@ -10,21 +10,14 @@ import { Minus, Square, X } from 'lucide-react';
 
 function App() {
   const [workspacePath, setWorkspacePath] = useState(null);
-  const [activeFile, setActiveFile] = useState(null);
-  const [fileContent, setFileContent] = useState('');
-  const [unsavedChanges, setUnsavedChanges] = useState(false);
-  const [activeTab, setActiveTab] = useState('explorer'); // explorer, search, extensions
+  const [panes, setPanes] = useState([]);
+  const [activePaneIndex, setActivePaneIndex] = useState(-1);
+  const [activeTab, setActiveTab] = useState('explorer');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [newFilePrompt, setNewFilePrompt] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-
-  const autoSaveInfo = useRef({ activeFile, fileContent, unsavedChanges });
-
-  useEffect(() => {
-    autoSaveInfo.current = { activeFile, fileContent, unsavedChanges };
-  }, [activeFile, fileContent, unsavedChanges]);
 
   const loadWorkspace = async () => {
     const folderPath = await window.electronAPI.openFolderDialog();
@@ -34,37 +27,63 @@ function App() {
   };
 
   const openFile = async (filePath) => {
-    if (unsavedChanges) {
-      await saveCurrentFile();
+    const existingIndex = panes.findIndex(p => p.filePath === filePath);
+    if (existingIndex !== -1) {
+      setActivePaneIndex(existingIndex);
+      return;
     }
+
     try {
       const content = await window.electronAPI.readFile(filePath);
-      setActiveFile(filePath);
-      setFileContent(content);
-      setUnsavedChanges(false);
+      const newPane = {
+        filePath,
+        content,
+        originalContent: content
+      };
+
+      setPanes(prevPanes => {
+        const nextPanes = [...prevPanes];
+        if (activePaneIndex >= 0 && activePaneIndex < nextPanes.length) {
+          const activePane = nextPanes[activePaneIndex];
+          if (!activePane.filePath) {
+            nextPanes[activePaneIndex] = newPane;
+            return nextPanes;
+          } else {
+            nextPanes.splice(activePaneIndex + 1, 0, newPane);
+            setActivePaneIndex(activePaneIndex + 1);
+            return nextPanes;
+          }
+        } else {
+          nextPanes.push(newPane);
+          setActivePaneIndex(nextPanes.length - 1);
+          return nextPanes;
+        }
+      });
     } catch (e) {
-      console.error("Failed to read file", e);
+      console.error(e);
     }
   };
 
   const saveCurrentFile = useCallback(async () => {
-    const { activeFile, fileContent, unsavedChanges } = autoSaveInfo.current;
-    if (activeFile && unsavedChanges) {
-      try {
-        await window.electronAPI.saveFile(activeFile, fileContent);
-        setUnsavedChanges(false);
-      } catch (e) {
-        console.error("Failed to save file", e);
+    if (activePaneIndex >= 0 && activePaneIndex < panes.length) {
+      const pane = panes[activePaneIndex];
+      if (pane.filePath && pane.content !== pane.originalContent) {
+        try {
+          await window.electronAPI.saveFile(pane.filePath, pane.content);
+          setPanes(prevPanes => {
+            const nextPanes = [...prevPanes];
+            nextPanes[activePaneIndex] = {
+              ...nextPanes[activePaneIndex],
+              originalContent: pane.content
+            };
+            return nextPanes;
+          });
+        } catch (e) {
+          console.error(e);
+        }
       }
     }
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      saveCurrentFile();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [saveCurrentFile]);
+  }, [activePaneIndex, panes]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -83,12 +102,13 @@ function App() {
 
   const handleRun = () => {
     setIsTerminalOpen(true);
-    if (activeFile) {
-      setTimeout(() => {
-        // Send a node command to terminal to run current file
-        // Requires quotes in case of spaces in path
-        window.electronAPI.writeTerminal(`node "${activeFile}"\r`);
-      }, 500);
+    if (activePaneIndex >= 0 && activePaneIndex < panes.length) {
+      const activePane = panes[activePaneIndex];
+      if (activePane.filePath) {
+        setTimeout(() => {
+          window.electronAPI.writeTerminal(`node "${activePane.filePath}"\r`);
+        }, 500);
+      }
     }
   };
 
@@ -107,7 +127,6 @@ function App() {
     const newPath = workspacePath + (workspacePath.includes('\\') ? '\\' : '/') + newFileName;
     const created = await window.electronAPI.createFile(newPath);
     if (created) {
-      // Force refresh explorer or just open it
       openFile(newPath);
     } else {
       alert('File already exists or could not be created. Please ensure you have restarted the application server!');
@@ -119,11 +138,15 @@ function App() {
     if (confirm(`Are you sure you want to delete ${filePath.split(/[/\\]/).pop()}?`)) {
       const deleted = await window.electronAPI.deleteFile(filePath);
       if (deleted) {
-        if (activeFile === filePath) {
-          setActiveFile(null);
-          setFileContent('');
-        }
-        // Ideally we refresh the exact folder tree, but for simplicity we reload the workspace root
+        setPanes(prevPanes => {
+          const nextPanes = prevPanes.filter(p => p.filePath !== filePath);
+          if (nextPanes.length === 0) {
+            setActivePaneIndex(-1);
+          } else if (activePaneIndex >= nextPanes.length) {
+            setActivePaneIndex(nextPanes.length - 1);
+          }
+          return nextPanes;
+        });
         if (workspacePath) {
           loadWorkspaceSilent(workspacePath);
         }
@@ -134,15 +157,13 @@ function App() {
   };
 
   const loadWorkspaceSilent = async (path) => {
-    // Increment refreshKey to force Sidebar remount
     setRefreshKey(prev => prev + 1);
   };
 
   const handleCloseFolder = () => {
     setWorkspacePath(null);
-    setActiveFile(null);
-    setFileContent('');
-    setUnsavedChanges(false);
+    setPanes([]);
+    setActivePaneIndex(-1);
     setFileMenuOpen(false);
   };
 
@@ -150,9 +171,133 @@ function App() {
     window.electronAPI.close();
   };
 
+  const splitPane = (index) => {
+    const paneToCopy = panes[index];
+    const newPane = {
+      filePath: paneToCopy ? paneToCopy.filePath : null,
+      content: paneToCopy ? paneToCopy.content : '',
+      originalContent: paneToCopy ? paneToCopy.originalContent : '',
+    };
+    
+    setPanes(prevPanes => {
+      const nextPanes = [...prevPanes];
+      nextPanes.splice(index + 1, 0, newPane);
+      return nextPanes;
+    });
+    setActivePaneIndex(index + 1);
+  };
+
+  const closePane = async (index) => {
+    const pane = panes[index];
+    const isDirty = pane.filePath && pane.content !== pane.originalContent;
+    
+    if (isDirty) {
+      const fileName = pane.filePath.split(/[/\\]/).pop();
+      const result = await window.electronAPI.showMessageBox({
+        type: 'warning',
+        buttons: ['Save', "Don't Save", 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        title: 'Save Changes',
+        message: `Do you want to save the changes you made to ${fileName}?`,
+        detail: "Your changes will be lost if you don't save them."
+      });
+
+      if (result.response === 0) {
+        try {
+          await window.electronAPI.saveFile(pane.filePath, pane.content);
+        } catch (e) {
+          console.error(e);
+          return;
+        }
+      } else if (result.response === 2) {
+        return;
+      }
+    }
+    
+    setPanes(prevPanes => {
+      const nextPanes = prevPanes.filter((_, i) => i !== index);
+      if (nextPanes.length === 0) {
+        setActivePaneIndex(-1);
+      } else if (activePaneIndex >= nextPanes.length) {
+        setActivePaneIndex(nextPanes.length - 1);
+      } else if (activePaneIndex === index) {
+        setActivePaneIndex(Math.max(0, index - 1));
+      }
+      return nextPanes;
+    });
+  };
+
+  const updatePaneContent = (index, newContent) => {
+    setPanes(prevPanes => {
+      const nextPanes = [...prevPanes];
+      if (index >= 0 && index < nextPanes.length) {
+        nextPanes[index] = {
+          ...nextPanes[index],
+          content: newContent
+        };
+      }
+      return nextPanes;
+    });
+  };
+
+  useEffect(() => {
+    const handleCloseRequest = async () => {
+      const unsavedPanes = panes.filter(p => p.filePath && p.content !== p.originalContent);
+      for (const pane of unsavedPanes) {
+        const fileName = pane.filePath.split(/[/\\]/).pop();
+        const result = await window.electronAPI.showMessageBox({
+          type: 'warning',
+          buttons: ['Save', "Don't Save", 'Cancel'],
+          defaultId: 0,
+          cancelId: 2,
+          title: 'Save Changes',
+          message: `Do you want to save the changes you made to ${fileName}?`,
+          detail: "Your changes will be lost if you don't save them."
+        });
+
+        if (result.response === 0) {
+          try {
+            await window.electronAPI.saveFile(pane.filePath, pane.content);
+          } catch (e) {
+            console.error(e);
+            return;
+          }
+        } else if (result.response === 2) {
+          return;
+        }
+      }
+      window.electronAPI.confirmClose();
+    };
+
+    window.electronAPI.onWindowCloseRequest(handleCloseRequest);
+  }, [panes]);
+
+  const activeFile = (activePaneIndex >= 0 && activePaneIndex < panes.length) ? panes[activePaneIndex].filePath : null;
+
+  const getLanguageName = (filePath) => {
+    if (!filePath) return 'Plain Text';
+    const ext = filePath.split('.').pop().toLowerCase();
+    switch (ext) {
+      case 'js':
+      case 'jsx': return 'JavaScript';
+      case 'ts':
+      case 'tsx': return 'TypeScript';
+      case 'html': return 'HTML';
+      case 'css': return 'CSS';
+      case 'json': return 'JSON';
+      case 'md':
+      case 'markdown': return 'Markdown';
+      case 'py': return 'Python';
+      case 'cpp':
+      case 'c':
+      case 'h': return 'C++';
+      default: return 'Plain Text';
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-vscode-bg text-vscode-text select-none relative">
-      {/* New File Modal */}
       {newFilePrompt && (
         <div className="absolute top-0 left-0 w-full h-full bg-black/50 flex items-start justify-center z-50 pt-20">
           <div className="bg-vscode-panel border border-vscode-border shadow-2xl p-4 w-96 rounded shadow-black/50">
@@ -177,7 +322,6 @@ function App() {
         </div>
       )}
 
-      {/* Title Bar */}
       <div className="h-[30px] bg-vscode-titleBar flex items-center justify-between pl-2 [app-region:drag]">
         <div className="flex items-center text-xs space-x-4 [app-region:no-drag]">
           <span className="font-semibold px-2">The Ashmi Editor</span>
@@ -207,15 +351,13 @@ function App() {
         <div className="flex h-full [app-region:no-drag]">
           <button className="px-4 hover:bg-vscode-hoverBg transition-colors flex items-center justify-center" onClick={() => window.electronAPI.minimize()}><Minus size={14}/></button>
           <button className="px-4 hover:bg-vscode-hoverBg transition-colors flex items-center justify-center" onClick={() => window.electronAPI.maximize()}><Square size={12}/></button>
-          <button className="px-4 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center" onClick={() => window.electronAPI.close()}><X size={16}/></button>
+          <button className="px-4 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center" onClick={handleCloseEditor}><X size={16}/></button>
         </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Activity Bar */}
         <ActivityBar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-        {/* Sidebar */}
         <div className="w-64 bg-vscode-sidebar border-r border-vscode-border flex flex-col">
           <div className="px-4 py-2 text-xs uppercase tracking-wider text-vscode-text/70">
             {activeTab === 'explorer' && 'Explorer'}
@@ -240,38 +382,77 @@ function App() {
           </div>
         </div>
 
-        {/* Main Editor & Terminal Area */}
         <div className="flex-1 flex flex-col bg-vscode-bg min-w-0">
-          {/* Editor Area */}
           <div className="flex-1 flex flex-col relative min-h-0">
             {activeTab === 'settings' ? (
               <SettingsView />
-            ) : activeFile ? (
-              <>
-                {/* Editor Tabs */}
-                <div className="flex items-center h-[35px] bg-vscode-sidebar border-b border-vscode-border">
-                  <div className="flex items-center h-full px-4 bg-vscode-bg border-r border-vscode-border text-sm min-w-[120px]">
-                    <span className={unsavedChanges ? "text-vscode-text italic" : "text-vscode-activeText"}>
-                      {activeFile.split(/[/\\]/).pop()}
-                    </span>
-                    {unsavedChanges && <span className="ml-2 w-2 h-2 rounded-full bg-vscode-text/50"></span>}
-                  </div>
-                </div>
-                {/* Breadcrumbs */}
-                <div className="h-[22px] px-4 text-xs text-vscode-text/60 flex items-center border-b border-vscode-border shadow-sm">
-                  {activeFile.replace(/\\/g, ' > ').replace(/\//g, ' > ')}
-                </div>
-                <div className="flex-1 overflow-hidden relative">
-                  <Editor 
-                    content={fileContent} 
-                    activeFile={activeFile}
-                    onChange={(newContent) => {
-                      setFileContent(newContent);
-                      setUnsavedChanges(true);
-                    }} 
-                  />
-                </div>
-              </>
+            ) : panes.length > 0 ? (
+              <div className="flex-1 flex overflow-hidden divide-x divide-vscode-border">
+                {panes.map((pane, index) => {
+                  const isActive = index === activePaneIndex;
+                  const isDirty = pane.filePath && pane.content !== pane.originalContent;
+                  const fileName = pane.filePath ? pane.filePath.split(/[/\\]/).pop() : 'Untitled';
+
+                  return (
+                    <div 
+                      key={index} 
+                      className={`flex-1 flex flex-col min-w-0 relative ${isActive ? 'ring-1 ring-inset ring-vscode-accent/30' : ''}`}
+                      onClick={() => setActivePaneIndex(index)}
+                    >
+                      <div className="flex items-center justify-between h-[35px] bg-vscode-sidebar border-b border-vscode-border">
+                        <div className="flex items-center h-full px-4 bg-vscode-bg border-r border-vscode-border text-sm min-w-[120px] justify-between group">
+                          <span className={isDirty ? "text-vscode-text italic truncate pr-2" : "text-vscode-activeText truncate pr-2"}>
+                            {fileName}
+                          </span>
+                          <div className="flex items-center space-x-1">
+                            {isDirty && <span className="w-2 h-2 rounded-full bg-vscode-text/50"></span>}
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                closePane(index);
+                              }} 
+                              className="text-vscode-text/40 hover:text-vscode-text hover:bg-vscode-hoverBg rounded p-0.5 ml-1"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center pr-2 space-x-1">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              splitPane(index);
+                            }}
+                            title="Split Editor Right"
+                            className="text-vscode-text/60 hover:text-vscode-text hover:bg-vscode-hoverBg p-1 rounded"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                              <path d="M1.5 2.5A1.5 1.5 0 0 1 3 1h10a1.5 1.5 0 0 1 1.5 1.5v11A1.5 1.5 0 0 1 13 15H3a1.5 1.5 0 0 1-1.5-1.5v-11zM3 2a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h4.5V2H3zm5.5 12H13a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5H8.5v12z"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+
+                      {pane.filePath && (
+                        <div className="h-[22px] px-4 text-xs text-vscode-text/60 flex items-center border-b border-vscode-border shadow-sm truncate">
+                          {pane.filePath.replace(/\\/g, ' > ').replace(/\//g, ' > ')}
+                        </div>
+                      )}
+
+                      <div className="flex-1 overflow-hidden relative">
+                        <Editor 
+                          content={pane.content} 
+                          activeFile={pane.filePath}
+                          onChange={(newContent) => {
+                            updatePaneContent(index, newContent);
+                          }} 
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
               <div className="flex-1 flex items-center justify-center text-vscode-text/30 font-sans">
                 <div className="text-center">
@@ -282,7 +463,6 @@ function App() {
             )}
           </div>
 
-          {/* Terminal Panel */}
           {isTerminalOpen && (
             <div className="h-64 border-t border-vscode-border flex flex-col bg-vscode-panel">
               <div className="flex items-center justify-between px-4 py-1 border-b border-vscode-border text-xs">
@@ -303,7 +483,6 @@ function App() {
         </div>
       </div>
       
-      {/* Status Bar */}
       <div className="h-6 bg-vscode-statusBar flex items-center px-2 text-xs text-white justify-between select-none">
         <div className="flex items-center space-x-3">
           <span className="cursor-pointer hover:bg-white/20 px-1 rounded">main*</span>
@@ -318,7 +497,9 @@ function App() {
         <div className="flex items-center space-x-3">
           <span className="cursor-pointer hover:bg-white/20 px-1 rounded">Ln 1, Col 1</span>
           <span className="cursor-pointer hover:bg-white/20 px-1 rounded">UTF-8</span>
-          <span className="cursor-pointer hover:bg-white/20 px-1 rounded">JavaScript</span>
+          <span className="cursor-pointer hover:bg-white/20 px-1 rounded">
+            {getLanguageName(activeFile)}
+          </span>
         </div>
       </div>
     </div>

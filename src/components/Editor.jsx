@@ -6,8 +6,7 @@ function Editor({ content, onChange, activeFile }) {
     onChange(value || '');
   };
 
-  // Determine language based on file extension
-  let language = 'plaintext'; // default fallback so non-JS files don't show JS syntax errors
+  let language = 'plaintext';
   if (activeFile) {
     const ext = activeFile.split('.').pop().toLowerCase();
     switch (ext) {

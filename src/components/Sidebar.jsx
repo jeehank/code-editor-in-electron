@@ -41,7 +41,7 @@ function FileNode({ node, onFileSelect, onDeleteFile, activeFile, depth = 0, set
           {node.isDirectory ? (
             isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
           ) : (
-            <div className="w-4" /> // spacer
+            <div className="w-4" />
           )}
         </div>
         <div className="mr-1 text-vscode-accent">
@@ -79,7 +79,6 @@ function Sidebar({ workspacePath, onFileSelect, onDeleteFile, activeFile }) {
     }
   }, [workspacePath]);
 
-  // Close context menu when clicking anywhere else
   useEffect(() => {
     const handleClick = () => setContextMenu({ visible: false, x: 0, y: 0, node: null });
     window.addEventListener('click', handleClick);
