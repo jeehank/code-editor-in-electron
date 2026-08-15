@@ -259,4 +259,3 @@ This project is provided as-is for educational and personal use.
 - [Lucide Icons](https://lucide.dev/) — beautiful open-source icons
 - [Vite](https://vitejs.dev/) — lightning-fast build tooling
 
-summarize this and give me description of entire project
